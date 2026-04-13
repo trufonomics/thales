@@ -311,11 +311,11 @@ def run_toto(series_list, train_df, test_df, horizons):
         return {}
 
     print("Loading Toto...")
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    device = "cpu"  # Force CPU — torch 2.7 doesn't support RTX 5090
     try:
         toto_model = Toto.from_pretrained("Datadog/Toto-Open-Base-1.0")
         toto_model = toto_model.to(device).eval()
-        forecaster = TotoForecaster(model=toto_model.backbone)
+        forecaster = TotoForecaster(model=toto_model.model)
     except Exception as e:
         print(f"Toto load failed: {e}")
         return {}
