@@ -218,22 +218,17 @@ def run_moirai(series_list, train_df, test_df, horizons, model_size="small"):
                     context_length=min(len(train_vals), 2048),
                     patch_size="auto",
                     num_samples=20,
+                    target_dim=1,
+                    feat_dynamic_real_dim=0,
+                    past_feat_dynamic_real_dim=0,
                 )
 
-                from gluonts.dataset.pandas import PandasDataset
-                ds = PandasDataset.from_long_dataframe(
-                    pd.DataFrame({
+                from gluonts.dataset.common import ListDataset
+                ds = ListDataset(
+                    [{
+                        "start": pd.Timestamp(train_df["date"].iloc[0]),
                         "target": train_vals,
-                        "date": pd.date_range(
-                            start=train_df["date"].iloc[0],
-                            periods=len(train_vals),
-                            freq="D",
-                        ),
-                        "item_id": name,
-                    }),
-                    target="target",
-                    timestamp="date",
-                    item_id="item_id",
+                    }],
                     freq="D",
                 )
 
