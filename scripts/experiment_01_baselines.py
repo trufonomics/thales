@@ -212,7 +212,7 @@ def run_moirai(series_list, train_df, test_df, horizons, model_size="small"):
                 continue
 
             try:
-                predictor = MoiraiForecast(
+                forecast_module = MoiraiForecast(
                     module=model,
                     prediction_length=h,
                     context_length=min(len(train_vals), 2048),
@@ -224,6 +224,7 @@ def run_moirai(series_list, train_df, test_df, horizons, model_size="small"):
                 )
 
                 from gluonts.dataset.common import ListDataset
+                predictor = forecast_module.create_predictor(batch_size=1)
                 ds = ListDataset(
                     [{
                         "start": pd.Timestamp(train_df["date"].iloc[0]),
