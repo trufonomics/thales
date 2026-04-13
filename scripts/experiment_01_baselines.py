@@ -96,14 +96,16 @@ def run_chronos(series_list, train_df, test_df, horizons, model_id="amazon/chron
             - amazon/chronos-t5-small (46M, original tokenization approach)
     """
     try:
-        from chronos import ChronosPipeline
+        from chronos import ChronosPipeline, ChronosBoltPipeline
     except ImportError:
         print("chronos-forecasting not installed. pip install chronos-forecasting")
         return {}
 
     model_name = model_id.split("/")[-1]
     print(f"Loading {model_name}...")
-    pipeline = ChronosPipeline.from_pretrained(
+    is_bolt = "bolt" in model_id.lower()
+    pipeline_cls = ChronosBoltPipeline if is_bolt else ChronosPipeline
+    pipeline = pipeline_cls.from_pretrained(
         model_id,
         device_map="auto",
         torch_dtype=torch.float32,
