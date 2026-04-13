@@ -303,18 +303,24 @@ def run_tirex(series_list, train_df, test_df, horizons):
 def run_toto(series_list, train_df, test_df, horizons):
     """Run Datadog Toto (151M params) zero-shot."""
     try:
-        from transformers import pipeline as hf_pipeline
+        from toto.model.toto import Toto
+        from toto.inference.forecaster import TotoForecaster
+        from toto.data.util.dataset import MaskedTimeseries
     except ImportError:
-        print("transformers not installed")
+        print("toto not installed. pip install git+https://github.com/DataDog/toto.git")
         return {}
 
     print("Loading Toto...")
-    pipe = hf_pipeline(
-        "time-series-forecasting",
-        model="Datadog/Toto-Open-Base-1.0",
-        device="cuda:0" if torch.cuda.is_available() else "cpu",
-        trust_remote_code=True,
-    )
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    try:
+        toto_model = Toto.from_pretrained("Datadog/Toto-Open-Base-1.0")
+        toto_model = toto_model.to(device).eval()
+        forecaster = TotoForecaster(model=toto_model.backbone)
+    except Exception as e:
+        print(f"Toto load failed: {e}")
+        return {}
+
+    DAY_SECONDS = 86400
 
     results = {}
     for series in tqdm(series_list, desc="Toto"):
@@ -322,14 +328,34 @@ def run_toto(series_list, train_df, test_df, horizons):
         train_vals = train_df[name].ffill().bfill().values.astype(float)
         test_vals = test_df[name].ffill().bfill().values.astype(float)
 
+        context_len = min(len(train_vals), 4096)
+        vals = train_vals[-context_len:]
+
+        start_ts = int(pd.Timestamp(train_df["date"].iloc[-context_len]).timestamp())
+        timestamps = np.array([start_ts + i * DAY_SECONDS for i in range(context_len)])
+
+        series_tensor = torch.tensor(vals, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
+        padding_mask = torch.ones(1, 1, context_len, dtype=torch.bool).to(device)
+        id_mask = torch.zeros(1, 1, context_len, dtype=torch.int64).to(device)
+        ts_tensor = torch.tensor(timestamps, dtype=torch.int64).unsqueeze(0).unsqueeze(0).to(device)
+        interval = torch.tensor([[DAY_SECONDS]], dtype=torch.int64).to(device)
+
+        inputs = MaskedTimeseries(
+            series=series_tensor,
+            padding_mask=padding_mask,
+            id_mask=id_mask,
+            timestamp_seconds=ts_tensor,
+            time_interval_seconds=interval,
+            num_exogenous_variables=0,
+        )
+
         for h in horizons:
             if len(test_vals) < h:
                 continue
             try:
-                context_len = min(len(train_vals), 4096)
-                context = train_vals[-context_len:].tolist()
-                out = pipe(context, prediction_length=h)
-                median_pred = np.array(out["median"])[:h]
+                forecast = forecaster.forecast(inputs, prediction_length=h, num_samples=20)
+                samples = forecast.samples.cpu().numpy()
+                median_pred = np.median(samples, axis=0).flatten()[:h]
                 actual = test_vals[:h]
 
                 key = f"{name}_h{h}"
