@@ -123,8 +123,8 @@ def run_chronos(series_list, train_df, test_df, horizons, model_id="amazon/chron
                 continue
 
             if is_bolt:
-                quantiles, mean = pipeline.predict(context, prediction_length=h)
-                median_pred = mean.numpy().flatten()[:h]
+                forecast = pipeline.predict(context, prediction_length=h)
+                median_pred = forecast.numpy().flatten()[:h]
             else:
                 forecast = pipeline.predict(context, h, num_samples=20)
                 median_pred = np.median(forecast.numpy(), axis=1).flatten()[:h]
