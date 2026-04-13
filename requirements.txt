@@ -1,0 +1,13 @@
+numpy>=1.24
+pandas>=2.0
+torch>=2.1
+transformers>=4.38
+gluonts>=0.14
+chronos-forecasting>=1.4
+uni2ts>=1.0
+huggingface_hub>=0.20
+scipy>=1.11
+scikit-learn>=1.3
+matplotlib>=3.7
+tqdm>=4.65
+properscoring>=0.1
