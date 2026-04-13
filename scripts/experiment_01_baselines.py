@@ -265,8 +265,10 @@ def run_tirex(series_list, train_df, test_df, horizons):
         return {}
 
     print("Loading TiRex...")
+    import os
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""  # Force CPU — torch 2.7 doesn't support RTX 5090
     try:
-        model = TiRexZero.from_pretrained("NX-AI/TiRex-xl-1.1", backend="torch")
+        model = TiRexZero.from_pretrained("NX-AI/TiRex", backend="torch")
     except Exception as e:
         print(f"TiRex load failed (may need HuggingFace auth): {e}")
         return {}
@@ -282,9 +284,11 @@ def run_tirex(series_list, train_df, test_df, horizons):
                 continue
             try:
                 context_len = min(len(train_vals), 2048)
-                context = torch.tensor(train_vals[-context_len:], dtype=torch.float32).unsqueeze(0)
+                context = train_vals[-context_len:].astype(np.float32)
                 out = model.forecast(context, prediction_length=h)
-                median_pred = out.median(dim=-1).values.numpy().flatten()[:h]
+                # out is a tuple: (quantiles_tensor, median_tensor)
+                quantiles, median = out
+                median_pred = median.numpy().flatten()[:h]
                 actual = test_vals[:h]
 
                 key = f"{name}_h{h}"
