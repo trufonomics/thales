@@ -122,8 +122,12 @@ def run_chronos(series_list, train_df, test_df, horizons, model_id="amazon/chron
             if len(test_vals) < h:
                 continue
 
-            forecast = pipeline.predict(context, h, num_samples=20)
-            median_pred = np.median(forecast.numpy(), axis=1).flatten()[:h]
+            if is_bolt:
+                quantiles, mean = pipeline.predict(context, prediction_length=h)
+                median_pred = mean.numpy().flatten()[:h]
+            else:
+                forecast = pipeline.predict(context, h, num_samples=20)
+                median_pred = np.median(forecast.numpy(), axis=1).flatten()[:h]
             actual = test_vals[:h]
 
             key = f"{name}_h{h}"
