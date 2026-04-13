@@ -86,23 +86,31 @@ def run_naive_baselines(series_list, train_df, test_df, horizons):
     return results
 
 
-def run_chronos(series_list, train_df, test_df, horizons, model_size="small"):
-    """Run Amazon Chronos zero-shot."""
+def run_chronos(series_list, train_df, test_df, horizons, model_id="amazon/chronos-bolt-small"):
+    """Run Amazon Chronos zero-shot.
+
+    Args:
+        model_id: HuggingFace model ID. Options:
+            - amazon/chronos-bolt-small (48M, recommended — faster, direct quantile)
+            - amazon/chronos-bolt-base (205M)
+            - amazon/chronos-t5-small (46M, original tokenization approach)
+    """
     try:
         from chronos import ChronosPipeline
     except ImportError:
         print("chronos-forecasting not installed. pip install chronos-forecasting")
         return {}
 
-    print(f"Loading Chronos-{model_size}...")
+    model_name = model_id.split("/")[-1]
+    print(f"Loading {model_name}...")
     pipeline = ChronosPipeline.from_pretrained(
-        f"amazon/chronos-t5-{model_size}",
+        model_id,
         device_map="auto",
         torch_dtype=torch.float32,
     )
 
     results = {}
-    for series in tqdm(series_list, desc=f"Chronos-{model_size}"):
+    for series in tqdm(series_list, desc=model_name):
         name = series["name"]
         train_vals = train_df[name].ffill().bfill().values.astype(float)
         test_vals = test_df[name].ffill().bfill().values.astype(float)
@@ -275,7 +283,7 @@ def main():
         "--models",
         nargs="+",
         default=["naive"],
-        choices=["naive", "chronos", "timesfm", "moirai", "all"],
+        choices=["naive", "chronos-bolt", "chronos-t5", "timesfm", "moirai", "all"],
         help="Which models to run",
     )
     parser.add_argument(
@@ -300,7 +308,7 @@ def main():
     args = parser.parse_args()
 
     if "all" in args.models:
-        args.models = ["naive", "chronos", "timesfm", "moirai"]
+        args.models = ["naive", "chronos-bolt", "chronos-t5", "moirai"]
 
     print(f"Loading Truflation data (frozen={args.frozen})...")
     cat_df = load_categories(frozen=args.frozen)
@@ -323,10 +331,18 @@ def main():
             series_list, train_df, test_df, args.horizons
         )
 
-    if "chronos" in args.models:
-        print("\n=== Running Chronos ===")
-        all_results["chronos"] = run_chronos(
-            series_list, train_df, test_df, args.horizons
+    if "chronos-bolt" in args.models:
+        print("\n=== Running Chronos-Bolt (48M, direct quantile) ===")
+        all_results["chronos-bolt"] = run_chronos(
+            series_list, train_df, test_df, args.horizons,
+            model_id="amazon/chronos-bolt-small",
+        )
+
+    if "chronos-t5" in args.models:
+        print("\n=== Running Chronos-T5 (46M, tokenized) ===")
+        all_results["chronos-t5"] = run_chronos(
+            series_list, train_df, test_df, args.horizons,
+            model_id="amazon/chronos-t5-small",
         )
 
     if "timesfm" in args.models:
