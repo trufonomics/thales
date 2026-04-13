@@ -256,6 +256,95 @@ def run_moirai(series_list, train_df, test_df, horizons, model_size="small"):
     return results
 
 
+def run_tirex(series_list, train_df, test_df, horizons):
+    """Run NX-AI TiRex (xLSTM-based, 35M params) zero-shot."""
+    try:
+        from transformers import pipeline as hf_pipeline
+    except ImportError:
+        print("transformers not installed")
+        return {}
+
+    print("Loading TiRex...")
+    pipe = hf_pipeline(
+        "time-series-forecasting",
+        model="NX-AI/TiRex",
+        device="cuda:0" if torch.cuda.is_available() else "cpu",
+    )
+
+    results = {}
+    for series in tqdm(series_list, desc="TiRex"):
+        name = series["name"]
+        train_vals = train_df[name].ffill().bfill().values.astype(float)
+        test_vals = test_df[name].ffill().bfill().values.astype(float)
+
+        for h in horizons:
+            if len(test_vals) < h:
+                continue
+            try:
+                context_len = min(len(train_vals), 2048)
+                context = train_vals[-context_len:].tolist()
+                out = pipe(context, prediction_length=h)
+                median_pred = np.array(out["median"])[:h]
+                actual = test_vals[:h]
+
+                key = f"{name}_h{h}"
+                results[key] = {
+                    "series": name,
+                    "horizon": h,
+                    "metrics": evaluate_forecast(actual, median_pred, train_vals),
+                }
+            except Exception as e:
+                print(f"TiRex failed on {name} h={h}: {e}")
+                continue
+
+    return results
+
+
+def run_toto(series_list, train_df, test_df, horizons):
+    """Run Datadog Toto (151M params) zero-shot."""
+    try:
+        from transformers import pipeline as hf_pipeline
+    except ImportError:
+        print("transformers not installed")
+        return {}
+
+    print("Loading Toto...")
+    pipe = hf_pipeline(
+        "time-series-forecasting",
+        model="Datadog/Toto-Open-Base-1.0",
+        device="cuda:0" if torch.cuda.is_available() else "cpu",
+        trust_remote_code=True,
+    )
+
+    results = {}
+    for series in tqdm(series_list, desc="Toto"):
+        name = series["name"]
+        train_vals = train_df[name].ffill().bfill().values.astype(float)
+        test_vals = test_df[name].ffill().bfill().values.astype(float)
+
+        for h in horizons:
+            if len(test_vals) < h:
+                continue
+            try:
+                context_len = min(len(train_vals), 4096)
+                context = train_vals[-context_len:].tolist()
+                out = pipe(context, prediction_length=h)
+                median_pred = np.array(out["median"])[:h]
+                actual = test_vals[:h]
+
+                key = f"{name}_h{h}"
+                results[key] = {
+                    "series": name,
+                    "horizon": h,
+                    "metrics": evaluate_forecast(actual, median_pred, train_vals),
+                }
+            except Exception as e:
+                print(f"Toto failed on {name} h={h}: {e}")
+                continue
+
+    return results
+
+
 def aggregate_results(all_results: dict) -> pd.DataFrame:
     """Aggregate per-series results into summary table."""
     rows = []
@@ -289,7 +378,7 @@ def main():
         "--models",
         nargs="+",
         default=["naive"],
-        choices=["naive", "chronos-bolt", "chronos-t5", "timesfm", "moirai", "all"],
+        choices=["naive", "chronos-bolt", "chronos-t5", "timesfm", "moirai", "tirex", "toto", "all"],
         help="Which models to run",
     )
     parser.add_argument(
@@ -314,7 +403,7 @@ def main():
     args = parser.parse_args()
 
     if "all" in args.models:
-        args.models = ["naive", "chronos-bolt", "chronos-t5", "moirai"]
+        args.models = ["naive", "chronos-bolt", "chronos-t5", "moirai", "tirex", "toto"]
 
     print(f"Loading Truflation data (frozen={args.frozen})...")
     cat_df = load_categories(frozen=args.frozen)
@@ -358,8 +447,20 @@ def main():
         )
 
     if "moirai" in args.models:
-        print("\n=== Running Moirai ===")
+        print("\n=== Running Moirai (14M) ===")
         all_results["moirai"] = run_moirai(
+            series_list, train_df, test_df, args.horizons
+        )
+
+    if "tirex" in args.models:
+        print("\n=== Running TiRex (35M, xLSTM) ===")
+        all_results["tirex"] = run_tirex(
+            series_list, train_df, test_df, args.horizons
+        )
+
+    if "toto" in args.models:
+        print("\n=== Running Toto (151M, Datadog) ===")
+        all_results["toto"] = run_toto(
             series_list, train_df, test_df, args.horizons
         )
 
