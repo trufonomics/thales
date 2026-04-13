@@ -156,7 +156,7 @@ def run_timesfm(series_list, train_df, test_df, horizons):
             horizon_len=max(horizons),
         ),
         checkpoint=timesfm.TimesFmCheckpoint(
-            huggingface_repo_id="google/timesfm-2.5-200m-pytorch",
+            huggingface_repo_id="google/timesfm-1.2-200m-pytorch",
         ),
     )
 
