@@ -257,19 +257,23 @@ def run_moirai(series_list, train_df, test_df, horizons, model_size="small"):
 
 
 def run_tirex(series_list, train_df, test_df, horizons):
-    """Run NX-AI TiRex (xLSTM-based, 35M params) zero-shot."""
+    """Run NX-AI TiRex (xLSTM-based, 35M params) zero-shot.
+
+    Requires: pip install git+https://github.com/NX-AI/tirex.git
+    Also requires HuggingFace authentication (model is gated).
+    """
     try:
-        from transformers import pipeline as hf_pipeline
+        from tirex import TiRexZero
     except ImportError:
-        print("transformers not installed")
+        print("tirex not installed. pip install git+https://github.com/NX-AI/tirex.git")
         return {}
 
     print("Loading TiRex...")
-    pipe = hf_pipeline(
-        "time-series-forecasting",
-        model="NX-AI/TiRex",
-        device="cuda:0" if torch.cuda.is_available() else "cpu",
-    )
+    try:
+        model = TiRexZero.from_pretrained("NX-AI/TiRex-xl-1.1", backend="torch")
+    except Exception as e:
+        print(f"TiRex load failed (may need HuggingFace auth): {e}")
+        return {}
 
     results = {}
     for series in tqdm(series_list, desc="TiRex"):
@@ -282,9 +286,9 @@ def run_tirex(series_list, train_df, test_df, horizons):
                 continue
             try:
                 context_len = min(len(train_vals), 2048)
-                context = train_vals[-context_len:].tolist()
-                out = pipe(context, prediction_length=h)
-                median_pred = np.array(out["median"])[:h]
+                context = torch.tensor(train_vals[-context_len:], dtype=torch.float32).unsqueeze(0)
+                out = model.forecast(context, prediction_length=h)
+                median_pred = out.median(dim=-1).values.numpy().flatten()[:h]
                 actual = test_vals[:h]
 
                 key = f"{name}_h{h}"
