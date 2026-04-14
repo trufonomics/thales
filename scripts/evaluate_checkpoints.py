@@ -23,6 +23,10 @@ from src.data import load_categories
 from src.dataset import normalize_streams
 from src.models import MODEL_REGISTRY
 
+# Import stable xLSTM for loading its checkpoint
+sys.path.insert(0, str(Path(__file__).parent))
+from experiment_02_xlstm import StableXLSTMForecaster
+
 
 RESULTS_DIR = Path(__file__).parent.parent / "results" / "experiment_02"
 HORIZONS = [7, 30, 90]
@@ -46,7 +50,12 @@ ARCH_CONFIGS = {
 
 
 def load_data():
-    """Load and prepare data matching Experiment 2 protocol."""
+    """Load and prepare data matching Experiment 2 training protocol EXACTLY.
+
+    Uses normalize_streams() on ALL data — same as training script.
+    This means test data stats leak into normalization, which is not ideal
+    for a final eval, but necessary to match the checkpoint's learned distribution.
+    """
     cat_df = load_categories(frozen=True)
 
     index_cols = sorted([c for c in cat_df.columns if 'Index' in c or 'index' in c])
@@ -58,14 +67,8 @@ def load_data():
     df_clean = pd.DataFrame(data, columns=index_cols).ffill().bfill()
     data = df_clean.values
 
-    # Normalize using TRAINING data stats only (no leakage)
-    train_end = np.searchsorted(dates, np.datetime64("2023-01-01"))
-    train_data = data[:train_end]
-    means = np.mean(train_data, axis=0)
-    stds = np.std(train_data, axis=0)
-    stds = np.where(stds == 0, 1.0, stds)
-
-    data_norm = (data - means) / stds
+    # Use same normalization as training (normalize_streams on all data)
+    data_norm, means, stds = normalize_streams(data)
 
     test_start = np.searchsorted(dates, np.datetime64("2024-01-01"))
 
@@ -151,9 +154,14 @@ def main():
         print(f"{'='*50}")
 
         config = ARCH_CONFIGS[arch_name]
-        model = MODEL_REGISTRY[arch_name](
-            num_streams=num_streams, horizon=90, **config
-        ).to(device)
+        if arch_name == "xlstm":
+            model = StableXLSTMForecaster(
+                num_streams=num_streams, horizon=90, **config
+            ).to(device)
+        else:
+            model = MODEL_REGISTRY[arch_name](
+                num_streams=num_streams, horizon=90, **config
+            ).to(device)
 
         state = torch.load(ckpt_path, map_location=device, weights_only=True)
         model.load_state_dict(state)
@@ -186,10 +194,12 @@ def main():
     print("-" * 70)
 
     for name, res in all_results.items():
-        params = ARCH_CONFIGS[name]
-        p = sum(p.numel() for p in MODEL_REGISTRY[name](
-            num_streams=num_streams, horizon=90, **params
-        ).parameters())
+        cfg = ARCH_CONFIGS[name]
+        if name == "xlstm":
+            tmp = StableXLSTMForecaster(num_streams=num_streams, horizon=90, **cfg)
+        else:
+            tmp = MODEL_REGISTRY[name](num_streams=num_streams, horizon=90, **cfg)
+        p = sum(pp.numel() for pp in tmp.parameters())
         label = f"Thales-{name} ({p/1e6:.1f}M)"
         print(f"{label:<25} {res.get(7,{}).get('mae',0):>10.4f} "
               f"{res.get(30,{}).get('mae',0):>10.4f} "
