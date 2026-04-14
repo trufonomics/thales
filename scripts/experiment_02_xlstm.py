@@ -32,12 +32,17 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class StableSLSTMCell(nn.Module):
-    """sLSTM cell with clamped exponential gates for numerical stability."""
+    """sLSTM cell using log-space exponential gating for numerical stability.
 
-    def __init__(self, input_dim, hidden_dim, exp_clamp=5.0):
+    Instead of computing exp() directly, we work in log-space:
+    - Store log(i) and log(f) instead of i and f
+    - Use logsumexp for the normalizer
+    - Only exponentiate at the final output
+    """
+
+    def __init__(self, input_dim, hidden_dim):
         super().__init__()
         self.hidden_dim = hidden_dim
-        self.exp_clamp = exp_clamp
 
         self.W_i = nn.Linear(input_dim + hidden_dim, hidden_dim)
         self.W_f = nn.Linear(input_dim + hidden_dim, hidden_dim)
@@ -45,25 +50,35 @@ class StableSLSTMCell(nn.Module):
         self.W_c = nn.Linear(input_dim + hidden_dim, hidden_dim)
         self.ln = nn.LayerNorm(hidden_dim)
 
-        # Initialize forget gate bias high (keep memory by default)
         nn.init.constant_(self.W_f.bias, 1.0)
-        # Initialize input gate bias low (be selective)
         nn.init.constant_(self.W_i.bias, -1.0)
+        nn.init.zeros_(self.W_o.bias)
 
-    def forward(self, x, h, c, n):
+        # Small init for all weights
+        for w in [self.W_i, self.W_f, self.W_o, self.W_c]:
+            nn.init.xavier_uniform_(w.weight, gain=0.1)
+
+    def forward(self, x, h, c, log_n):
         combined = torch.cat([x, h], dim=-1)
 
-        # Clamped exponential gates
-        i = torch.exp(torch.clamp(self.W_i(combined), -self.exp_clamp, self.exp_clamp))
-        f = torch.exp(torch.clamp(self.W_f(combined), -self.exp_clamp, self.exp_clamp))
+        # Log-space gates (never compute raw exp)
+        log_i = self.W_i(combined)
+        log_f = self.W_f(combined)
         o = torch.sigmoid(self.W_o(combined))
         c_candidate = torch.tanh(self.W_c(combined))
 
-        n = f * n + i
-        c = f * c + i * c_candidate
-        h = o * torch.tanh(self.ln(c / (n + 1e-6)))
+        # Log-space normalizer update: log(n') = logsumexp(log_f + log_n, log_i)
+        log_n_new = torch.logaddexp(log_f + log_n, log_i)
 
-        return h, c, n
+        # Stabilized cell update using normalized gates
+        # i_norm = exp(log_i - log_n_new), f_norm = exp(log_f + log_n - log_n_new)
+        i_norm = torch.exp(log_i - log_n_new)
+        f_norm = torch.exp(log_f + log_n - log_n_new)
+
+        c = f_norm * c + i_norm * c_candidate
+        h = o * torch.tanh(self.ln(c))
+
+        return h, c, log_n_new
 
 
 class StableSLSTMBlock(nn.Module):
@@ -89,11 +104,11 @@ class StableSLSTMBlock(nn.Module):
         batch, seq_len, _ = x.shape
         h = torch.zeros(batch, self.hidden_dim, device=x.device)
         c = torch.zeros(batch, self.hidden_dim, device=x.device)
-        n = torch.ones(batch, self.hidden_dim, device=x.device)
+        log_n = torch.zeros(batch, self.hidden_dim, device=x.device)
 
         outputs = []
         for t in range(seq_len):
-            h, c, n = self.cell(x[:, t], h, c, n)
+            h, c, log_n = self.cell(x[:, t], h, c, log_n)
             outputs.append(h)
 
         y = torch.stack(outputs, dim=1)
