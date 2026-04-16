@@ -132,6 +132,60 @@ def run_model(model_name, model_id, series_list, train_df, test_df, horizons):
                     print(f"  Moirai failed {name} h={h}: {e}")
         return results
 
+    elif model_name == "toto":
+        from toto.model.toto import Toto
+        from toto.inference.forecaster import TotoForecaster
+        from toto.data.util.dataset import MaskedTimeseries
+
+        device = "cpu"
+        toto_model = Toto.from_pretrained("Datadog/Toto-Open-Base-1.0").to(device).eval()
+        forecaster = TotoForecaster(model=toto_model.model)
+        DAY_SECONDS = 86400
+
+        results = {}
+        for series in tqdm(series_list, desc="toto"):
+            name = series["name"]
+            train_vals = train_df[name].ffill().bfill().values.astype(float)
+            test_vals = test_df[name].ffill().bfill().values.astype(float)
+            start_val = train_vals[-1]
+
+            ctx_len = min(len(train_vals), 4096)
+            vals = train_vals[-ctx_len:]
+            start_ts = int(pd.Timestamp(train_df["date"].iloc[-ctx_len]).timestamp())
+            ts = np.array([start_ts + i * DAY_SECONDS for i in range(ctx_len)])
+
+            series_tensor = torch.tensor(vals, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
+            padding_mask = torch.ones(1, 1, ctx_len, dtype=torch.bool).to(device)
+            id_mask = torch.zeros(1, 1, ctx_len, dtype=torch.int64).to(device)
+            ts_tensor = torch.tensor(ts, dtype=torch.int64).unsqueeze(0).unsqueeze(0).to(device)
+            interval = torch.tensor([[DAY_SECONDS]], dtype=torch.int64).to(device)
+
+            inputs = MaskedTimeseries(
+                series=series_tensor, padding_mask=padding_mask, id_mask=id_mask,
+                timestamp_seconds=ts_tensor, time_interval_seconds=interval,
+                num_exogenous_variables=0,
+            )
+
+            for h in horizons:
+                if len(test_vals) < h:
+                    continue
+                try:
+                    forecast = forecaster.forecast(inputs, prediction_length=h, num_samples=20)
+                    samples = forecast.samples.cpu().numpy()
+                    pred = np.median(samples, axis=0).flatten()[:h]
+                    actual = test_vals[:h]
+                    mae = np.mean(np.abs(pred - actual))
+                    h_dir = horizon_direction(pred, actual, start_val)
+                    results[f"{name}_h{h}"] = {
+                        "series": name, "horizon": h,
+                        "mae": float(mae), "horizon_direction": h_dir,
+                        "pred_end": float(pred[-1]), "actual_end": float(actual[-1]),
+                        "start": float(start_val),
+                    }
+                except Exception as e:
+                    print(f"  Toto failed {name} h={h}: {e}")
+        return results
+
     elif model_name == "tirex":
         from tirex import TiRexZero
         import os
@@ -173,11 +227,11 @@ def run_model(model_name, model_id, series_list, train_df, test_df, horizons):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--models", nargs="+", default=["chronos-t5"],
-                       choices=["chronos-t5", "chronos-bolt", "moirai", "tirex", "all"])
+                       choices=["chronos-t5", "chronos-bolt", "moirai", "tirex", "toto", "all"])
     args = parser.parse_args()
 
     if "all" in args.models:
-        args.models = ["chronos-t5", "chronos-bolt", "moirai", "tirex"]
+        args.models = ["chronos-t5", "chronos-bolt", "moirai", "tirex", "toto"]
 
     MODEL_IDS = {
         "chronos-t5": "amazon/chronos-t5-small",
