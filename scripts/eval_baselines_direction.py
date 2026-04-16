@@ -132,6 +132,43 @@ def run_model(model_name, model_id, series_list, train_df, test_df, horizons):
                     print(f"  Moirai failed {name} h={h}: {e}")
         return results
 
+    elif model_name == "timesfm":
+        import timesfm
+        tfm = timesfm.TimesFm(
+            hparams=timesfm.TimesFmHparams(
+                backend="gpu" if torch.cuda.is_available() else "cpu",
+                per_core_batch_size=32,
+                horizon_len=max(horizons),
+            ),
+            checkpoint=timesfm.TimesFmCheckpoint(
+                huggingface_repo_id="google/timesfm-1.0-200m-pytorch",
+            ),
+        )
+
+        results = {}
+        for series in tqdm(series_list, desc="timesfm"):
+            name = series["name"]
+            train_vals = train_df[name].ffill().bfill().values.astype(float)
+            test_vals = test_df[name].ffill().bfill().values.astype(float)
+            start_val = train_vals[-1]
+
+            point_forecast, _ = tfm.forecast([train_vals], freq=[0])
+
+            for h in horizons:
+                if len(test_vals) < h:
+                    continue
+                pred = point_forecast[0][:h]
+                actual = test_vals[:h]
+                mae = np.mean(np.abs(pred - actual))
+                h_dir = horizon_direction(pred, actual, start_val)
+                results[f"{name}_h{h}"] = {
+                    "series": name, "horizon": h,
+                    "mae": float(mae), "horizon_direction": h_dir,
+                    "pred_end": float(pred[-1]), "actual_end": float(actual[-1]),
+                    "start": float(start_val),
+                }
+        return results
+
     elif model_name == "toto":
         from toto.model.toto import Toto
         from toto.inference.forecaster import TotoForecaster
@@ -227,11 +264,11 @@ def run_model(model_name, model_id, series_list, train_df, test_df, horizons):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--models", nargs="+", default=["chronos-t5"],
-                       choices=["chronos-t5", "chronos-bolt", "moirai", "tirex", "toto", "all"])
+                       choices=["chronos-t5", "chronos-bolt", "moirai", "tirex", "toto", "timesfm", "all"])
     args = parser.parse_args()
 
     if "all" in args.models:
-        args.models = ["chronos-t5", "chronos-bolt", "moirai", "tirex", "toto"]
+        args.models = ["chronos-t5", "chronos-bolt", "moirai", "tirex", "toto", "timesfm"]
 
     MODEL_IDS = {
         "chronos-t5": "amazon/chronos-t5-small",
